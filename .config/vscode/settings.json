@@ -148,7 +148,6 @@
   "vim.highlightedyank.color": "#3e4352",
   "vim.useSystemClipboard": true,
   "vim.scrolloff": 5,
-  "accessibility.voice.keywordActivation": "chatInView",
   "[typescript]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
