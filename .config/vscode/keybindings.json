@@ -306,5 +306,13 @@
     "key": "ctrl+j",
     "command": "editor.action.inlineSuggest.acceptNextLine",
     "when": "inlineSuggestionVisible && !editorReadonly"
+  },
+  {
+    "key": "ctrl+b s",
+    "command": "workbench.action.openRecent"
+  },
+  {
+    "key": "ctrl+r",
+    "command": "-workbench.action.openRecent"
   }
 ]
