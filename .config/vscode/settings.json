@@ -114,7 +114,7 @@
   "editor.quickSuggestions": {
     "other": "off"
   },
-  "editor.suggestOnTriggerCharacters": false,
+  "editor.suggestOnTriggerCharacters": true,
   "editor.tabCompletion": "on",
   "editor.snippetSuggestions": "top",
   "editor.cursorSmoothCaretAnimation": "off",
