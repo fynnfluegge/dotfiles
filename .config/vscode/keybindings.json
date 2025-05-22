@@ -143,7 +143,7 @@
     "when": "vim.mode == 'Normal' && editorTextFocus"
   },
   {
-    "key": "space f w",
+    "key": "space f g",
     "command": "workbench.action.findInFiles",
     "when": "vim.mode == 'Normal' && (editorTextFocus || !inputFocus)"
   },
@@ -158,7 +158,7 @@
     "when": "(vim.mode == 'Normal' || vim.mode == 'Visual') && (editorTextFocus || !inputFocus)"
   },
   {
-    "key": "space /",
+    "key": "g c c",
     "command": "editor.action.commentLine",
     "when": "vim.mode == 'Normal' && editorTextFocus"
   },
@@ -219,7 +219,7 @@
     "command": "workbench.action.closeGroup"
   },
   {
-    "key": "\\",
+    "key": "shift-\\",
     "command": "workbench.action.splitEditor",
     "when": "vim.mode == 'Normal' && editorTextFocus"
   },
@@ -315,4 +315,9 @@
     "key": "ctrl+r",
     "command": "-workbench.action.openRecent"
   }
+{
+    "key": "space l d",
+    "command": "editor.action.showHover",
+    "when": "(vim.mode == 'Normal' && editorTextFocus) || (sideBarFocus && !inputFocus) || !inputFocus"
+}
 ]

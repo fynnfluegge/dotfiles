@@ -1,5 +1,5 @@
 {
-  "workbench.colorTheme": "Nord",
+  "workbench.colorTheme": "Bearded Theme Aquarelle Hydrangea",
   "workbench.activityBar.location": "hidden",
   "workbench.editor.showTabs": "multiple",
   "workbench.statusBar.visible": true,
@@ -73,11 +73,11 @@
     "editorCursor.foreground": "#39FF14",
     "terminalCursor.foreground": "#39FF14"
   },
-  "editor.fontFamily": "Hack Nerd Font",
+  "editor.fontFamily": "Hack Nerd Font Mono",
   "terminal.integrated.fontFamily": "Hack Nerd Font",
   "editor.fontSize": 14,
   "editor.fontLigatures": true,
-  "editor.lineHeight": 1.2,
+  "editor.lineHeight": 1.5,
   "editor.tokenColorCustomizations": {
     "textMateRules": [
       {
@@ -153,5 +153,6 @@
   },
   "[javascript]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
-  }
+  },
+  "editor.quickSuggestionsDelay": 0
 }
