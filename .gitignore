@@ -13,6 +13,7 @@
 !.config/tmux
 .config/tmux/*
 !.config/tmux/tmux.conf
+!.config/tmux/tmux-session-finder
 
 !.config/vscode
 .config/vscode/*

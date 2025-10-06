@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+# Fuzzy finder for existing tmux sessions
+# Usage: tmux-session-finder
+
+# Get list of existing tmux sessions with additional info
+get_sessions() {
+    if ! tmux list-sessions >/dev/null 2>&1; then
+        echo "No tmux sessions found"
+        exit 1
+    fi
+
+    # Format: session_name: X windows (created timestamp) [attached/detached]
+    tmux list-sessions -F "#{session_name}: #{session_windows} windows (created #{session_created_string}) [#{?session_attached,attached,detached}]"
+}
+
+# Main script
+main() {
+    # Get sessions and let user select with fzf
+    selected=$(get_sessions | fzf \
+        --height=60% \
+        --layout=reverse \
+        --border=rounded \
+        --prompt="󰓩 Select session: " \
+        --header="󰘳 Press ENTER to switch, ESC to cancel" \
+        --preview='
+            session_name=$(echo {} | cut -d: -f1)
+            echo "📋 Session: $session_name"
+            echo "├─────────────────────────────────────"
+            tmux list-windows -t "$session_name" -F "│ #{?window_active,●,○} #{window_index}: #{window_name}#{?window_zoomed_flag, 🔍,}#{?window_bell_flag, 🔔,}#{?window_activity_flag, ⚡,}"
+            echo "└─────────────────────────────────────"
+            echo
+            if tmux list-panes -t "$session_name" >/dev/null 2>&1; then
+                echo "🪟 Active window details:"
+                active_window=$(tmux list-windows -t "$session_name" -F "#{?window_active,#{window_index},}" | grep -v "^$")
+                if [ -n "$active_window" ]; then
+                    tmux list-panes -t "$session_name:$active_window" -F "  │ Pane #{pane_index}: #{pane_current_command}#{?pane_active, (active),}"
+                fi
+            fi
+        ' \
+        --preview-window=right:50%:wrap \
+        --color="border:#89b4fa,header:#cba6f7,prompt:#f38ba8" \
+        --no-info)
+
+    if [[ -z $selected ]]; then
+        exit 0
+    fi
+
+    # Extract session name (everything before the first colon)
+    session_name=$(echo "$selected" | cut -d: -f1)
+
+    # Check if we're already in tmux
+    if [[ -n $TMUX ]]; then
+        # Switch to the selected session
+        tmux switch-client -t "$session_name"
+    else
+        # Attach to the selected session
+        tmux attach-session -t "$session_name"
+    fi
+}
+
+main "$@"

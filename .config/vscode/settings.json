@@ -154,5 +154,6 @@
   "[javascript]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
-  "editor.quickSuggestionsDelay": 0
+  "editor.quickSuggestionsDelay": 0,
+  "github.copilot.nextEditSuggestions.enabled": true
 }
