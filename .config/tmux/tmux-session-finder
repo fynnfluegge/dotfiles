@@ -18,7 +18,7 @@ get_sessions() {
 main() {
     # Get sessions and let user select with fzf
     selected=$(get_sessions | fzf \
-        --height=60% \
+        --height=100% \
         --layout=reverse \
         --border=rounded \
         --prompt="󰓩 Select session: " \
@@ -38,7 +38,7 @@ main() {
                 fi
             fi
         ' \
-        --preview-window=right:50%:wrap \
+        --preview-window=right:30%:wrap \
         --color="border:#89b4fa,header:#cba6f7,prompt:#f38ba8" \
         --no-info)
 
