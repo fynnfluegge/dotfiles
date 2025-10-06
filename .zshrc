@@ -115,5 +115,6 @@ alias ta="tmux attach -t"
 alias tl='tmux list-sessions'
 alias tn='tmux new-session -s $(basename "$PWD")'
 alias gitmergeconflicts="git mergetool --no-prompt --tool=vimdiff"
+alias c="clear"
 
 [ -f $HOME/.zcustomaliases ] && source $HOME/.zcustomaliases
