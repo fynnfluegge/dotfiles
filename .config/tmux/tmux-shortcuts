@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+
+# tmux-shortcuts - Display common tmux shortcuts in fzf and execute selected commands
+# Usage: Run this script in a tmux popup
+
+# Format: "description|command_type:command"
+# command_type: cmd (tmux command), key (send keys), info (informational only)
+shortcuts=(
+    "Create new window (prefix + c)|cmd:new-window"
+    "Rename current window (prefix + ,)|cmd:command-prompt -I '#W' 'rename-window \"%%\"'"
+    "Kill current window (prefix + &)|cmd:kill-window"
+    "Next window (prefix + n)|cmd:next-window"
+    "Previous window (prefix + p)|cmd:previous-window"
+    "Switch to window by number (prefix + [0-9])|info:Press prefix + [0-9]"
+    "Session finder popup (prefix + f)|key:f"
+    ""
+    "Split horizontally (prefix + |)|cmd:split-window -h -c '#{pane_current_path}'"
+    "Split vertically (prefix + \\)|cmd:split-window -v -c '#{pane_current_path}'"
+    "Kill current pane (prefix + x)|cmd:kill-pane"
+    "Toggle pane zoom (prefix + z)|cmd:resize-pane -Z"
+    "Next pane (prefix + o)|cmd:select-pane -t :.+"
+    "Last pane (prefix + ;)|cmd:last-pane"
+    "Show pane numbers (prefix + q)|cmd:display-panes"
+    "Move pane left (prefix + {)|cmd:swap-pane -U"
+    "Move pane right (prefix + })|cmd:swap-pane -D"
+    ""
+    "Select pane left (h)|info:Press h (no prefix needed)"
+    "Select pane down (j)|info:Press j (no prefix needed)"
+    "Select pane up (k)|info:Press k (no prefix needed)"
+    "Select pane right (l)|info:Press l (no prefix needed)"
+    "Select pane with Alt+arrows (Alt + ↑↓←→)|info:Alt + arrow keys (no prefix)"
+    "Switch windows (Shift + ←→)|info:Shift + arrow keys (no prefix)"
+    "Switch windows (Alt + H/L)|info:Alt + H/L (no prefix)"
+    ""
+    "Enter copy mode (prefix + [)|cmd:copy-mode"
+    "Begin selection (v in copy mode)|info:Press v in copy mode"
+    "Copy selection and exit (y in copy mode)|info:Press y in copy mode"
+    "Rectangle selection (C-v in copy mode)|info:Press C-v in copy mode"
+    ""
+    "Detach from session (prefix + d)|cmd:detach-client"
+    "Rename session (prefix + $)|cmd:command-prompt -I '#S' 'rename-session \"%%\"'"
+    "Kill current session|cmd:kill-session"
+    "List sessions (prefix + s)|cmd:choose-session"
+    "Previous session (prefix + ()|cmd:switch-client -p"
+    "Next session (prefix + ))|cmd:switch-client -n"
+    ""
+    "Save session state (prefix + Ctrl-s)|info:Press prefix + Ctrl-s"
+    "Restore session state (prefix + Ctrl-r)|info:Press prefix + Ctrl-r"
+    ""
+    "Command prompt (prefix + :)|cmd:command-prompt"
+    "List all key bindings (prefix + ?)|cmd:list-keys"
+    "Show clock (prefix + t)|cmd:clock-mode"
+    "Reload config|cmd:source-file ~/.config/tmux/tmux.conf"
+)
+
+# Check if fzf is available
+if ! command -v fzf &> /dev/null; then
+    echo "fzf is not installed. Please install fzf to use this feature."
+    echo "Install with: brew install fzf (macOS) or your package manager"
+    exit 1
+fi
+
+# Function to execute the selected command
+execute_command() {
+    local selection="$1"
+
+    # Skip empty lines
+    [[ -z "$selection" ]] && return
+
+    # Parse the selection
+    if [[ "$selection" =~ ^(.+)\|(.+):(.+)$ ]]; then
+        local description="${BASH_REMATCH[1]}"
+        local cmd_type="${BASH_REMATCH[2]}"
+        local command="${BASH_REMATCH[3]}"
+
+        case "$cmd_type" in
+            "cmd")
+                # Execute tmux command (use eval to handle complex commands with quotes)
+                eval "tmux $command" 2>/dev/null
+                ;;
+            "key")
+                # Send key sequence (with prefix)
+                tmux send-keys C-b "$command"
+                ;;
+            "info")
+                # Just display info message
+                tmux display-message "$command"
+                ;;
+        esac
+    elif [[ "$selection" =~ ^(.+)\|info:(.+)$ ]]; then
+        # Handle info-only items
+        tmux display-message "${BASH_REMATCH[2]}"
+    fi
+}
+
+# Display shortcuts in fzf with custom options
+selected=$(printf '%s\n' "${shortcuts[@]}" | \
+    sed 's/|.*$//' | \
+    fzf \
+        --height=100% \
+        --border=rounded \
+        --margin=1,2 \
+        --padding=1 \
+        --info=inline \
+        --prompt="Tmux Shortcuts > " \
+        --header="Press Enter to execute command, Ctrl-C to exit" \
+        --no-multi \
+        --bind="enter:accept" \
+        --color="header:italic:dim" \
+        --preview-window=hidden \
+        --reverse)
+
+# Execute the selected command if something was selected
+if [[ -n "$selected" ]]; then
+    # Find the full entry with command info
+    for shortcut in "${shortcuts[@]}"; do
+        if [[ "$shortcut" =~ ^"$selected"\| ]]; then
+            execute_command "$shortcut"
+            break
+        fi
+    done
+fi
