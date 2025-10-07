@@ -44,13 +44,13 @@ shortcuts=(
     "Previous session (prefix + ()|cmd:switch-client -p"
     "Next session (prefix + ))|cmd:switch-client -n"
     ""
-    "Save session state (prefix + Ctrl-s)|info:Press prefix + Ctrl-s"
-    "Restore session state (prefix + Ctrl-r)|info:Press prefix + Ctrl-r"
+    "Save session state (prefix + Ctrl-s)|info:Press prefix + Ctrl-s to save session"
+    "Restore session state (prefix + Ctrl-r)|info:Press prefix + Ctrl-r to restore session"
     ""
     "Command prompt (prefix + :)|cmd:command-prompt"
     "List all key bindings (prefix + ?)|cmd:list-keys"
     "Show clock (prefix + t)|cmd:clock-mode"
-    "Reload config|cmd:source-file ~/.config/tmux/tmux.conf"
+    "Reload config (prefix + r)|cmd:source-file ~/.config/tmux/tmux.conf"
 )
 
 # Check if fzf is available
@@ -81,6 +81,12 @@ execute_command() {
             "key")
                 # Send key sequence (with prefix)
                 tmux send-keys C-b "$command"
+                ;;
+            "ctrl-key")
+                # Send control key combination with prefix
+                tmux send-keys C-b
+                sleep 0.1
+                tmux send-keys C-"$command"
                 ;;
             "info")
                 # Just display info message
