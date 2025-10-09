@@ -24,6 +24,9 @@
 !.config/ghostty
 .config/ghostty/*
 !.config/ghostty/config
+!.config/ghostty/themes
+.config/ghostty/themes/*
+!.config/ghostty/themes/catppuccin-macchiato.conf
 
 !.config/alacritty
 .config/alacritty/*

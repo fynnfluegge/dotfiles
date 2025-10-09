@@ -118,3 +118,4 @@ alias gitmergeconflicts="git mergetool --no-prompt --tool=vimdiff"
 alias c="clear"
 
 [ -f $HOME/.zcustomaliases ] && source $HOME/.zcustomaliases
+[ -f $HOME/.zenv ] && source $HOME/.zenv
