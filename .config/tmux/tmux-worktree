@@ -1,0 +1,398 @@
+#!/usr/bin/env bash
+
+# tmux-worktree - one tmux window per git worktree, for running coding agents in parallel
+#
+# Usage:
+#   tmux-worktree new [branch] [--base <ref>] [--agent <cmd>]   create worktree + window (prefix + W)
+#   tmux-worktree switch                                         jump to a worktree's window (prefix + g)
+#   tmux-worktree remove [-y]                                    close window + remove worktree (prefix + X)
+#
+# Without arguments every command asks interactively (fzf), so it works in a popup.
+#
+# Worktrees are created next to the repo, in <repo>.worktrees/<branch>
+# (branch slashes become dashes). New branches start from origin's default branch.
+#
+# Optional files in the repo root:
+#   .worktreeinclude  gitignored files to copy into new worktrees, one git pathspec
+#                     per line, e.g. "apps/web/.env*" (default when missing: .env*)
+#   .worktree-setup   executable, run in the new window's shell pane (e.g. pnpm install)
+#
+# Environment:
+#   TMUX_WT_ROOT    put worktrees in $TMUX_WT_ROOT/<repo>/<branch> instead
+#   TMUX_WT_AGENTS  comma-separated agent commands to offer (default: claude,codex)
+#   TMUX_WT_AGENT   always start this agent and skip the picker ("shell" = none)
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+FZF_COLORS="border:#89b4fa,header:#cba6f7,prompt:#f38ba8"
+
+die() {
+    echo "tmux-worktree: $*" >&2
+    # a popup closes on exit, so also show the error in the status line
+    tmux display-message "tmux-worktree: $*" 2>/dev/null
+    exit 1
+}
+
+pick() { # pick <prompt> <header> [fzf args...] < choices
+    local prompt=$1 header=$2
+    shift 2
+    fzf --height=100% --layout=reverse --border=rounded --no-info \
+        --prompt="$prompt " --header="$header" --color="$FZF_COLORS" "$@"
+}
+
+# --- git helpers -------------------------------------------------------------
+
+main_worktree() { # main worktree of the repo containing $1
+    git -C "$1" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p'
+}
+
+worktree_path() { # worktree_path <main-worktree> <branch>
+    local root=$1 parent
+    if [ -n "$TMUX_WT_ROOT" ]; then
+        parent="$TMUX_WT_ROOT/$(basename "$root")"
+    else
+        parent="$(dirname "$root")/$(basename "$root").worktrees"
+    fi
+    echo "$parent/${2//\//-}"
+}
+
+default_base() { # origin's default branch, else local main/master, else HEAD
+    local ref
+    if ref=$(git -C "$1" symbolic-ref -q --short refs/remotes/origin/HEAD); then
+        echo "$ref"
+        return
+    fi
+    for ref in main master; do
+        if git -C "$1" show-ref -q --verify "refs/heads/$ref"; then
+            echo "$ref"
+            return
+        fi
+    done
+    echo HEAD
+}
+
+list_branches() { # local branches, then remote branches without a local copy
+    local root=$1
+    git -C "$root" for-each-ref --sort=-committerdate --format='%(refname:short)' refs/heads
+    # "origin/HEAD" shortens to "origin", hence the slash check
+    awk 'NR == FNR { local[$0] = 1; next }
+         /\// && !/\/HEAD$/ { b = $0; sub(/^[^\/]*\//, "", b); if (!(b in local)) print }' \
+        <(git -C "$root" for-each-ref --format='%(refname:short)' refs/heads) \
+        <(git -C "$root" for-each-ref --sort=-committerdate --format='%(refname:short)' refs/remotes)
+}
+
+remote_branch() { # prints "<remote>/<branch>" if some remote has <branch>
+    local r
+    for r in $(git -C "$1" remote); do
+        if git -C "$1" show-ref -q --verify "refs/remotes/$r/$2"; then
+            echo "$r/$2"
+            return 0
+        fi
+    done
+    return 1
+}
+
+list_worktrees() { # "<branch>\t<path>" per worktree
+    git -C "$1" worktree list --porcelain | awk '
+        /^worktree / { p = substr($0, 10); b = "(detached)" }
+        /^branch /   { b = substr($0, 8); sub(/^refs\/heads\//, "", b) }
+        /^bare$/     { p = "" }
+        /^$/         { if (p != "") print b "\t" p; p = "" }
+        END          { if (p != "") print b "\t" p }'
+}
+
+worktree_of_branch() { # path of the worktree that has <branch> checked out
+    list_worktrees "$1" | awk -F'\t' -v b="$2" '$1 == b { print $2; exit }'
+}
+
+copy_includes() { # copy gitignored files (.worktreeinclude, default .env*) into a new worktree
+    local root=$1 dest=$2 line f n=0
+    local specs=()
+    if [ -f "$root/.worktreeinclude" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            case $line in '' | \#*) continue ;; esac
+            specs+=("$line")
+        done <"$root/.worktreeinclude"
+    else
+        specs=('.env*')
+    fi
+    [ ${#specs[@]} -gt 0 ] || return 0
+
+    while IFS= read -r -d '' f; do
+        [ -e "$dest/$f" ] && continue
+        mkdir -p "$dest/$(dirname "$f")" && cp -p "$root/$f" "$dest/$f" && n=$((n + 1))
+    done < <(git -C "$root" ls-files -z --others --ignored --exclude-standard -- "${specs[@]}")
+    [ $n -gt 0 ] && echo "copied $n ignored file(s) from $root"
+    return 0
+}
+
+# --- tmux helpers ------------------------------------------------------------
+
+window_for() { # id of a window showing worktree <path>: tagged, then exact cwd, then subdir
+    local path=$1 win
+    win=$(tmux list-windows -a -F '#{window_id}	#{@wt_path}' 2>/dev/null |
+        awk -F'\t' -v p="$path" '$2 == p { print $1; exit }')
+    [ -n "$win" ] || win=$(tmux list-panes -a -F '#{window_id}	#{pane_current_path}' 2>/dev/null |
+        awk -F'\t' -v p="$path" '$2 == p { print $1; exit }')
+    [ -n "$win" ] || win=$(tmux list-panes -a -F '#{window_id}	#{pane_current_path}' 2>/dev/null |
+        awk -F'\t' -v p="$path/" 'index($2, p) == 1 { print $1; exit }')
+    echo "$win"
+}
+
+jump_to() { # select a window, switching session if needed
+    local sess
+    sess=$(tmux display-message -p -t "$1" '#{session_id}')
+    tmux select-window -t "$1"
+    tmux switch-client -t "$sess" 2>/dev/null
+    return 0
+}
+
+pick_agent() { # pick_agent [resume] -> agent command, or "shell"
+    if [ -n "$TMUX_WT_AGENT" ]; then
+        echo "$TMUX_WT_AGENT"
+        return
+    fi
+    local a choices=()
+    local IFS=,
+    for a in ${TMUX_WT_AGENTS:-claude,codex}; do
+        command -v "${a%% *}" >/dev/null 2>&1 || continue
+        if [ "$1" = resume ]; then
+            case $a in
+                claude) choices+=("claude --continue") ;;
+                codex) choices+=("codex resume --last") ;;
+            esac
+        fi
+        choices+=("$a")
+    done
+    unset IFS
+    choices+=(shell)
+    printf '%s\n' "${choices[@]}" | pick "󰚩 Agent:" "What to start in the window (left pane)"
+}
+
+open_window() { # open_window <path> <name> <agent> [setup-root]
+    local path=$1 name=$2 agent=$3 setup_root=$4 win agent_pane shell_pane setup
+    read -r win agent_pane < <(tmux new-window -P -F '#{window_id} #{pane_id}' -n "$name" -c "$path")
+    [ -n "$win" ] || die "could not create a tmux window (not inside tmux?)"
+    tmux set-option -w -t "$win" @wt_path "$path"
+    shell_pane=$(tmux split-window -h -d -l 35% -t "$agent_pane" -c "$path" -P -F '#{pane_id}')
+
+    # .worktree-setup: committed in the worktree, or kept untracked in the main checkout
+    if [ -n "$setup_root" ]; then
+        if [ -x "$path/.worktree-setup" ]; then
+            setup="./.worktree-setup"
+        elif [ -x "$setup_root/.worktree-setup" ]; then
+            setup=$(printf '%q' "$setup_root/.worktree-setup")
+        fi
+        [ -n "$setup" ] && tmux send-keys -t "$shell_pane" "$setup" Enter
+    fi
+
+    if [ "$agent" != shell ]; then
+        tmux send-keys -t "$agent_pane" -l "$agent"
+        tmux send-keys -t "$agent_pane" Enter
+    fi
+    tmux select-pane -t "$agent_pane"
+}
+
+# --- commands ----------------------------------------------------------------
+
+cmd_new() {
+    local branch="" base="" agent="" interactive=""
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --base) base=$2; shift 2 ;;
+            --agent) agent=$2; shift 2 ;;
+            -*) die "unknown option: $1" ;;
+            *) branch=$1; shift ;;
+        esac
+    done
+
+    local root
+    root=$(main_worktree "$PWD")
+    [ -n "$root" ] || die "not inside a git repository: $PWD"
+
+    if [ -z "$branch" ]; then
+        interactive=1
+        local out rc key sel
+        out=$(list_branches "$root" | pick "󰘬 Branch:" \
+            "Type a new name, or pick a branch · ctrl-n: new branch from typed text" \
+            --print-query --expect=ctrl-n)
+        rc=$?
+        [ $rc -eq 130 ] && exit 0
+        key=$(sed -n 2p <<<"$out")
+        sel=$(sed -n 3p <<<"$out")
+        if [ "$key" = ctrl-n ] || [ -z "$sel" ]; then
+            branch=$(sed -n 1p <<<"$out")
+        else
+            branch=$sel
+        fi
+        [ -n "$branch" ] || exit 0
+    fi
+
+    # existing local branch, remote branch, or new branch?
+    local mode existing rref
+    if git -C "$root" show-ref -q --verify "refs/heads/$branch"; then
+        mode=local
+        existing=$(worktree_of_branch "$root" "$branch")
+        if [ -n "$existing" ]; then
+            # already checked out somewhere: go there instead of failing
+            local win
+            win=$(window_for "$existing")
+            if [ -n "$win" ]; then
+                jump_to "$win"
+            else
+                open_window "$existing" "$branch" "${agent:-$(pick_agent resume)}"
+            fi
+            return
+        fi
+    elif git -C "$root" show-ref -q --verify "refs/remotes/$branch"; then
+        mode=remote # picked "origin/foo" from the list
+        rref=$branch
+        branch=${branch#*/}
+    elif rref=$(remote_branch "$root" "$branch"); then
+        mode=remote # typed "foo" and origin/foo exists
+    else
+        mode=new
+        git check-ref-format --branch "$branch" >/dev/null 2>&1 || die "invalid branch name: $branch"
+        if [ -z "$base" ]; then
+            base=$(default_base "$root")
+            if [ -n "$interactive" ]; then
+                local here
+                here=$(git -C "$PWD" symbolic-ref -q --short HEAD)
+                base=$({ echo "$base"; [ -n "$here" ] && echo "$here"; list_branches "$root"; } |
+                    awk '!seen[$0]++' | pick "󰘬 Base:" "New branch '$branch' starts from")
+                [ -n "$base" ] || exit 0
+            fi
+        fi
+    fi
+
+    if [ -z "$agent" ]; then
+        agent=$(pick_agent)
+        [ -n "$agent" ] || exit 0
+    fi
+
+    local path err
+    path=$(worktree_path "$root" "$branch")
+    [ -e "$path" ] && die "path already exists: $path"
+    mkdir -p "$(dirname "$path")" || die "cannot create $(dirname "$path")"
+    case $mode in
+        # --no-track: don't make origin/main the upstream of the new branch
+        new) err=$(git -C "$root" worktree add --no-track -b "$branch" "$path" "$base" 2>&1) ;;
+        remote) err=$(git -C "$root" worktree add --track -b "$branch" "$path" "$rref" 2>&1) ;;
+        local) err=$(git -C "$root" worktree add "$path" "$branch" 2>&1) ;;
+    esac
+    [ $? -eq 0 ] || die "$(tail -1 <<<"$err")"
+
+    copy_includes "$root" "$path"
+    open_window "$path" "$branch" "$agent" "$root"
+}
+
+cmd_switch() {
+    local root
+    root=$(main_worktree "$PWD")
+    [ -n "$root" ] || die "not inside a git repository: $PWD"
+
+    local branch path mark sel
+    sel=$(list_worktrees "$root" | while IFS=$'\t' read -r branch path; do
+        if [ -n "$(window_for "$path")" ]; then mark="●"; else mark="○"; fi
+        printf '%s %s\t%s\n' "$mark" "$branch" "$path"
+    done | pick "󰙅 Worktree:" "● has a window · ENTER: go there (opens a window if needed)" \
+        --delimiter=$'\t' --with-nth=1 \
+        --preview="$(printf '%q' "$SELF") _preview {2}" --preview-window=right:60%:wrap)
+    [ -n "$sel" ] || exit 0
+
+    path=${sel#*$'\t'}
+    branch=${sel%%$'\t'*}
+    branch=${branch#* }
+    local win
+    win=$(window_for "$path")
+    if [ -n "$win" ]; then
+        jump_to "$win"
+    else
+        local agent
+        agent=$(pick_agent resume)
+        [ -n "$agent" ] || exit 0
+        open_window "$path" "$branch" "$agent"
+    fi
+}
+
+cmd_preview() { # fzf preview for cmd_switch
+    local path=$1 win pane
+    echo "$path"
+    echo
+    git -C "$path" -c color.status=always status -sb | head -15
+    echo
+    git -C "$path" log --oneline --color=always -5
+    win=$(window_for "$path")
+    if [ -n "$win" ]; then
+        pane=$(tmux list-panes -t "$win" -F '#{pane_id}' | head -1)
+        echo
+        echo "── $(tmux display-message -p -t "$win" '#{session_name}:#{window_index} #{window_name}') ──"
+        tmux capture-pane -p -J -t "$pane" | grep -v '^[[:space:]]*$' | tail -25
+    fi
+}
+
+cmd_remove() {
+    local yes=""
+    [ "$1" = -y ] && yes=1
+
+    local win path root branch
+    win=$(tmux display-message -p '#{window_id}')
+    path=$(tmux show-options -wqv -t "$win" @wt_path)
+    [ -n "$path" ] || path=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)
+    [ -n "$path" ] || die "this window is not in a git worktree"
+    [ -d "$path" ] || die "worktree is gone: $path (run git worktree prune)"
+    root=$(main_worktree "$path")
+    [ "$path" != "$root" ] || die "refusing to remove the main worktree: $root"
+    branch=$(git -C "$path" symbolic-ref -q --short HEAD)
+
+    # commits that would be lost: not on any remote and not on another local branch
+    local dirty lost
+    dirty=$(git -C "$path" status --porcelain | wc -l | tr -d ' ')
+    if [ -n "$branch" ]; then
+        lost=$(git -C "$path" rev-list --count HEAD --not --remotes --exclude="$branch" --branches)
+    else
+        lost=$(git -C "$path" rev-list --count HEAD --not --remotes --branches)
+    fi
+
+    echo "Remove worktree ${branch:-(detached HEAD)}"
+    echo "  $path"
+    [ "$dirty" -gt 0 ] && echo "  ⚠ $dirty uncommitted change(s) will be DELETED"
+    [ "$lost" -gt 0 ] && echo "  ⚠ $lost commit(s) exist only on this branch (branch is kept unless merged)"
+    if [ -z "$yes" ]; then
+        local ans
+        read -r -n1 -p "Close window and remove worktree? [y/N] " ans
+        echo
+        [[ $ans == [yY] ]] || exit 0
+    fi
+
+    cd "$root" || exit 1
+    local force=() err msg
+    [ "$dirty" -gt 0 ] && force=(--force)
+    err=$(git worktree remove "${force[@]}" "$path" 2>&1) || die "$(tail -1 <<<"$err")"
+    msg="removed worktree ${branch:-$path}"
+    if [ -n "$branch" ]; then
+        # -d refuses unmerged branches, so no commits are lost
+        if git branch -d "$branch" >/dev/null 2>&1; then
+            msg="$msg and branch"
+        else
+            msg="$msg (branch kept: not merged, delete with git branch -D $branch)"
+        fi
+    fi
+    git worktree prune
+    tmux display-message "$msg" 2>/dev/null
+
+    # close windows of this worktree last: this popup sits on top of one of them
+    local w
+    for w in $(tmux list-windows -a -F '#{window_id}	#{@wt_path}' |
+        awk -F'\t' -v p="$path" '$2 == p { print $1 }'); do
+        [ "$w" != "$win" ] && tmux kill-window -t "$w"
+    done
+    tmux kill-window -t "$win"
+}
+
+case $1 in
+    new) shift; cmd_new "$@" ;;
+    switch) shift; cmd_switch "$@" ;;
+    remove) shift; cmd_remove "$@" ;;
+    _preview) shift; cmd_preview "$@" ;;
+    *) sed -n '3,9p' "$SELF" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
