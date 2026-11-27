@@ -4,7 +4,7 @@
 # Usage: Run this script in a tmux popup
 
 # Format: "description|command_type:command"
-# command_type: cmd (tmux command), key (send keys), info (informational only)
+# command_type: cmd (tmux command), run (script in ~/.config/tmux), key (send keys), info (informational only)
 shortcuts=(
     "Create new window (prefix + c)|cmd:new-window"
     "Rename current window (prefix + ,)|prompt:#W:rename-window"
@@ -13,6 +13,10 @@ shortcuts=(
     "Previous window (prefix + p)|cmd:previous-window"
     "Switch to window by number (prefix + [0-9])|info:Press prefix + [0-9]"
     "Session finder popup (prefix + f)|key:f"
+    ""
+    "New worktree + agent window (prefix + W)|run:tmux-worktree new"
+    "Switch worktree window (prefix + g)|run:tmux-worktree switch"
+    "Remove current worktree + window (prefix + X)|run:tmux-worktree remove"
     ""
     "Split horizontally (prefix + |)|cmd:split-window -h -c '#{pane_current_path}'"
     "Split vertically (prefix + \\)|cmd:split-window -v -c '#{pane_current_path}'"
@@ -86,6 +90,10 @@ execute_command() {
                 local value
                 read -e -r -p "${description%% (*} [$current] > " value
                 [[ -n "$value" ]] && tmux "$subcmd" "$value"
+                ;;
+            "run")
+                # Run a script from ~/.config/tmux inside this popup, from the pane's directory
+                (cd "$(tmux display-message -p '#{pane_current_path}')" && eval "$HOME/.config/tmux/$command")
                 ;;
             "cmd")
                 # Execute tmux command (use eval to handle complex commands with quotes)

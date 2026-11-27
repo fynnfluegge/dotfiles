@@ -15,6 +15,7 @@
 !.config/tmux/tmux.conf
 !.config/tmux/tmux-session-finder
 !.config/tmux/tmux-shortcuts
+!.config/tmux/tmux-worktree
 
 !.config/vscode
 .config/vscode/*
